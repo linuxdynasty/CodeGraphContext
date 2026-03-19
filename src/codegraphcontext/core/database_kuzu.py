@@ -106,17 +106,49 @@ class KuzuDBManager:
             ("Annotation", "uid STRING, name STRING, path STRING, line_number INT64, end_line INT64, source STRING, docstring STRING, lang STRING, is_dependency BOOLEAN, PRIMARY KEY (uid)"),
             ("Record", "uid STRING, name STRING, path STRING, line_number INT64, end_line INT64, source STRING, docstring STRING, lang STRING, is_dependency BOOLEAN, PRIMARY KEY (uid)"),
             ("Property", "uid STRING, name STRING, path STRING, line_number INT64, end_line INT64, source STRING, docstring STRING, lang STRING, is_dependency BOOLEAN, PRIMARY KEY (uid)"),
-            ("Parameter", "uid STRING, name STRING, path STRING, function_line_number INT64, PRIMARY KEY (uid)")
+            ("Parameter", "uid STRING, name STRING, path STRING, function_line_number INT64, PRIMARY KEY (uid)"),
+            # Infrastructure node tables
+            ("K8sResource", "uid STRING, name STRING, kind STRING, api_version STRING, namespace STRING, labels STRING, annotations STRING, container_images STRING, path STRING, line_number INT64, lang STRING, PRIMARY KEY (uid)"),
+            ("ArgoCDApplication", "uid STRING, name STRING, namespace STRING, project STRING, source_repo STRING, source_path STRING, source_revision STRING, dest_server STRING, dest_namespace STRING, path STRING, line_number INT64, lang STRING, PRIMARY KEY (uid)"),
+            ("ArgoCDApplicationSet", "uid STRING, name STRING, namespace STRING, generators STRING, path STRING, line_number INT64, lang STRING, PRIMARY KEY (uid)"),
+            ("CrossplaneXRD", "uid STRING, name STRING, group STRING, kind STRING, plural STRING, claim_kind STRING, claim_plural STRING, path STRING, line_number INT64, lang STRING, PRIMARY KEY (uid)"),
+            ("CrossplaneComposition", "uid STRING, name STRING, composite_api_version STRING, composite_kind STRING, resource_count INT64, resource_names STRING, path STRING, line_number INT64, lang STRING, PRIMARY KEY (uid)"),
+            ("CrossplaneClaim", "uid STRING, name STRING, kind STRING, api_version STRING, namespace STRING, path STRING, line_number INT64, lang STRING, PRIMARY KEY (uid)"),
+            ("KustomizeOverlay", "path STRING, name STRING, namespace STRING, resources STRING[], patches STRING[], line_number INT64, lang STRING, PRIMARY KEY (path)"),
+            ("HelmChart", "uid STRING, name STRING, version STRING, app_version STRING, chart_type STRING, description STRING, dependencies STRING, path STRING, line_number INT64, lang STRING, PRIMARY KEY (uid)"),
+            ("HelmValues", "path STRING, name STRING, top_level_keys STRING, line_number INT64, lang STRING, PRIMARY KEY (path)"),
+            ("TerraformResource", "uid STRING, name STRING, resource_type STRING, resource_name STRING, path STRING, line_number INT64, lang STRING, PRIMARY KEY (uid)"),
+            ("TerraformVariable", "uid STRING, name STRING, var_type STRING, default STRING, description STRING, path STRING, line_number INT64, lang STRING, PRIMARY KEY (uid)"),
+            ("TerraformOutput", "uid STRING, name STRING, description STRING, value STRING, path STRING, line_number INT64, lang STRING, PRIMARY KEY (uid)"),
+            ("TerraformModule", "uid STRING, name STRING, source STRING, version STRING, path STRING, line_number INT64, lang STRING, PRIMARY KEY (uid)"),
+            ("TerraformDataSource", "uid STRING, name STRING, data_type STRING, data_name STRING, path STRING, line_number INT64, lang STRING, PRIMARY KEY (uid)"),
+            ("TerragruntConfig", "path STRING, name STRING, terraform_source STRING, includes STRING, line_number INT64, lang STRING, PRIMARY KEY (path)"),
+            # Ecosystem node tables
+            ("Ecosystem", "name STRING, org STRING, PRIMARY KEY (name)"),
+            ("Tier", "name STRING, risk_level STRING, PRIMARY KEY (name)")
         ]
-        
+
         rel_tables = [
-            ("CONTAINS", "FROM File TO Function, FROM File TO Class, FROM File TO Variable, FROM File TO Trait, FROM File TO Interface, FROM `Macro` TO `Macro`, FROM File TO `Macro`, FROM File TO Struct, FROM File TO Enum, FROM File TO `Union`, FROM File TO Annotation, FROM File TO Record, FROM File TO Property, FROM Repository TO Directory, FROM Directory TO Directory, FROM Directory TO File, FROM Repository TO File, FROM Class TO Function, FROM Function TO Function"),
+            ("CONTAINS", "FROM File TO Function, FROM File TO Class, FROM File TO Variable, FROM File TO Trait, FROM File TO Interface, FROM `Macro` TO `Macro`, FROM File TO `Macro`, FROM File TO Struct, FROM File TO Enum, FROM File TO `Union`, FROM File TO Annotation, FROM File TO Record, FROM File TO Property, FROM Repository TO Directory, FROM Directory TO Directory, FROM Directory TO File, FROM Repository TO File, FROM Class TO Function, FROM Function TO Function, FROM File TO K8sResource, FROM File TO ArgoCDApplication, FROM File TO ArgoCDApplicationSet, FROM File TO CrossplaneXRD, FROM File TO CrossplaneComposition, FROM File TO CrossplaneClaim, FROM File TO KustomizeOverlay, FROM File TO HelmChart, FROM File TO HelmValues, FROM File TO TerraformResource, FROM File TO TerraformVariable, FROM File TO TerraformOutput, FROM File TO TerraformModule, FROM File TO TerraformDataSource, FROM File TO TerragruntConfig, FROM Ecosystem TO Tier, FROM Tier TO Repository"),
             ("CALLS", "FROM Function TO Function, FROM Function TO Class, FROM File TO Function, FROM File TO Class, FROM Class TO Function, FROM Class TO Class, line_number INT64, args STRING[], full_call_name STRING"),
             ("IMPORTS", "FROM File TO Module, alias STRING, full_import_name STRING, imported_name STRING, line_number INT64"),
             ("INHERITS", "FROM Class TO Class, FROM Record TO Record, FROM Interface TO Interface"),
             ("HAS_PARAMETER", "FROM Function TO Parameter"),
             ("INCLUDES", "FROM Class TO Module"),
-            ("IMPLEMENTS", "FROM Class TO Interface, FROM Struct TO Interface, FROM Record TO Interface")
+            ("IMPLEMENTS", "FROM Class TO Interface, FROM Struct TO Interface, FROM Record TO Interface"),
+            # Cross-repo relationships
+            ("DEPENDS_ON", "FROM Repository TO Repository"),
+            ("SOURCES_FROM", "FROM ArgoCDApplication TO Repository"),
+            ("SATISFIED_BY", "FROM CrossplaneClaim TO CrossplaneXRD"),
+            ("IMPLEMENTED_BY", "FROM CrossplaneXRD TO CrossplaneComposition"),
+            ("USES_MODULE", "FROM TerraformModule TO Repository"),
+            ("DEPLOYS", "FROM ArgoCDApplication TO K8sResource"),
+            ("CONFIGURES", "FROM HelmValues TO HelmChart"),
+            ("SELECTS", "FROM K8sResource TO K8sResource"),
+            ("USES_IAM", "FROM K8sResource TO TerraformResource"),
+            ("ROUTES_TO", "FROM K8sResource TO K8sResource"),
+            ("PATCHES", "FROM KustomizeOverlay TO K8sResource"),
+            ("RUNS_IMAGE", "FROM K8sResource TO Repository")
         ]
 
         for table_name, schema in node_tables:

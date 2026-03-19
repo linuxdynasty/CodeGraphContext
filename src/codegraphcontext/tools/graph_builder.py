@@ -101,6 +101,10 @@ class GraphBuilder:
         self.job_manager = job_manager
         self.loop = loop
         self.driver = self.db_manager.get_driver()
+        # Infrastructure parsers (YAML + HCL) — loaded conditionally
+        from .languages.yaml_infra import InfraYAMLParser
+        from .languages.hcl_terraform import HCLTerraformParser
+
         self.parsers = {
             '.py': TreeSitterParser('python'),
             '.ipynb': TreeSitterParser('python'),
@@ -133,6 +137,17 @@ class GraphBuilder:
             '.ex': TreeSitterParser('elixir'),
             '.exs': TreeSitterParser('elixir'),
         }
+
+        # Register infrastructure parsers based on config
+        if (get_config_value("INDEX_YAML") or "true").lower() == "true":
+            yaml_parser = InfraYAMLParser('yaml')
+            self.parsers['.yaml'] = yaml_parser
+            self.parsers['.yml'] = yaml_parser
+
+        if (get_config_value("INDEX_HCL") or "true").lower() == "true":
+            hcl_parser = HCLTerraformParser('hcl')
+            self.parsers['.tf'] = hcl_parser
+            self.parsers['.hcl'] = hcl_parser
         self.create_schema()
 
     # A general schema creation based on common features across languages
@@ -157,11 +172,38 @@ class GraphBuilder:
                 session.run("CREATE CONSTRAINT annotation_unique IF NOT EXISTS FOR (a:Annotation) REQUIRE (a.name, a.path, a.line_number) IS UNIQUE")
                 session.run("CREATE CONSTRAINT record_unique IF NOT EXISTS FOR (r:Record) REQUIRE (r.name, r.path, r.line_number) IS UNIQUE")
                 session.run("CREATE CONSTRAINT property_unique IF NOT EXISTS FOR (p:Property) REQUIRE (p.name, p.path, p.line_number) IS UNIQUE")
-                
+
+                # Infrastructure node constraints
+                session.run("CREATE CONSTRAINT k8s_resource_unique IF NOT EXISTS FOR (k:K8sResource) REQUIRE (k.name, k.kind, k.path, k.line_number) IS UNIQUE")
+                session.run("CREATE CONSTRAINT argocd_app_unique IF NOT EXISTS FOR (a:ArgoCDApplication) REQUIRE (a.name, a.path, a.line_number) IS UNIQUE")
+                session.run("CREATE CONSTRAINT argocd_appset_unique IF NOT EXISTS FOR (a:ArgoCDApplicationSet) REQUIRE (a.name, a.path, a.line_number) IS UNIQUE")
+                session.run("CREATE CONSTRAINT xrd_unique IF NOT EXISTS FOR (x:CrossplaneXRD) REQUIRE (x.name, x.path, x.line_number) IS UNIQUE")
+                session.run("CREATE CONSTRAINT composition_unique IF NOT EXISTS FOR (c:CrossplaneComposition) REQUIRE (c.name, c.path, c.line_number) IS UNIQUE")
+                session.run("CREATE CONSTRAINT claim_unique IF NOT EXISTS FOR (cl:CrossplaneClaim) REQUIRE (cl.name, cl.kind, cl.path, cl.line_number) IS UNIQUE")
+                session.run("CREATE CONSTRAINT kustomize_unique IF NOT EXISTS FOR (ko:KustomizeOverlay) REQUIRE ko.path IS UNIQUE")
+                session.run("CREATE CONSTRAINT helm_chart_unique IF NOT EXISTS FOR (h:HelmChart) REQUIRE (h.name, h.path) IS UNIQUE")
+                session.run("CREATE CONSTRAINT helm_values_unique IF NOT EXISTS FOR (hv:HelmValues) REQUIRE hv.path IS UNIQUE")
+                session.run("CREATE CONSTRAINT tf_resource_unique IF NOT EXISTS FOR (r:TerraformResource) REQUIRE (r.name, r.path, r.line_number) IS UNIQUE")
+                session.run("CREATE CONSTRAINT tf_variable_unique IF NOT EXISTS FOR (v:TerraformVariable) REQUIRE (v.name, v.path, v.line_number) IS UNIQUE")
+                session.run("CREATE CONSTRAINT tf_output_unique IF NOT EXISTS FOR (o:TerraformOutput) REQUIRE (o.name, o.path, o.line_number) IS UNIQUE")
+                session.run("CREATE CONSTRAINT tf_module_unique IF NOT EXISTS FOR (m:TerraformModule) REQUIRE (m.name, m.path) IS UNIQUE")
+                session.run("CREATE CONSTRAINT tf_datasource_unique IF NOT EXISTS FOR (ds:TerraformDataSource) REQUIRE (ds.name, ds.path, ds.line_number) IS UNIQUE")
+                session.run("CREATE CONSTRAINT tg_config_unique IF NOT EXISTS FOR (tg:TerragruntConfig) REQUIRE tg.path IS UNIQUE")
+
+                # Ecosystem-level node constraints
+                session.run("CREATE CONSTRAINT ecosystem_name IF NOT EXISTS FOR (e:Ecosystem) REQUIRE e.name IS UNIQUE")
+                session.run("CREATE CONSTRAINT tier_name IF NOT EXISTS FOR (t:Tier) REQUIRE t.name IS UNIQUE")
+
                 # Indexes for language attribute
                 session.run("CREATE INDEX function_lang IF NOT EXISTS FOR (f:Function) ON (f.lang)")
                 session.run("CREATE INDEX class_lang IF NOT EXISTS FOR (c:Class) ON (c.lang)")
                 session.run("CREATE INDEX annotation_lang IF NOT EXISTS FOR (a:Annotation) ON (a.lang)")
+
+                # Infrastructure indexes
+                session.run("CREATE INDEX k8s_kind IF NOT EXISTS FOR (k:K8sResource) ON (k.kind)")
+                session.run("CREATE INDEX k8s_namespace IF NOT EXISTS FOR (k:K8sResource) ON (k.namespace)")
+                session.run("CREATE INDEX tf_resource_type IF NOT EXISTS FOR (r:TerraformResource) ON (r.resource_type)")
+
                 is_falkordb = getattr(self.db_manager, 'get_backend_type', lambda: 'neo4j')() != 'neo4j'
                 if is_falkordb:
                     # FalkorDB uses db.idx.fulltext.createNodeIndex per label
@@ -175,6 +217,11 @@ class GraphBuilder:
                         CREATE FULLTEXT INDEX code_search_index IF NOT EXISTS
                         FOR (n:Function|Class|Variable)
                         ON EACH [n.name, n.source, n.docstring]
+                    """)
+                    session.run("""
+                        CREATE FULLTEXT INDEX infra_search_index IF NOT EXISTS
+                        FOR (n:K8sResource|TerraformResource|ArgoCDApplication|CrossplaneXRD)
+                        ON EACH [n.name, n.kind, n.resource_type]
                     """)
                 
                 info_logger("Database schema verified/created successfully")
@@ -287,10 +334,10 @@ class GraphBuilder:
         with self.driver.session() as session:
             session.run(
                 """
-                MERGE (r:Repository {path: $path})
+                MERGE (r:Repository {path: $repo_path})
                 SET r.name = $name, r.is_dependency = $is_dependency
                 """,
-                path=repo_path_str,
+                repo_path=repo_path_str,
                 name=repo_name,
                 is_dependency=is_dependency,
             )
@@ -313,9 +360,9 @@ class GraphBuilder:
                 relative_path = file_name
 
             session.run("""
-                MERGE (f:File {path: $path})
+                MERGE (f:File {path: $file_path})
                 SET f.name = $name, f.relative_path = $relative_path, f.is_dependency = $is_dependency
-            """, path=file_path_str, name=file_name, relative_path=relative_path, is_dependency=is_dependency)
+            """, file_path=file_path_str, name=file_name, relative_path=relative_path, is_dependency=is_dependency)
 
             file_path_obj = Path(file_path_str)
             if repo_result:
@@ -346,9 +393,9 @@ class GraphBuilder:
 
             session.run(f"""
                 MATCH (p:{parent_label} {{path: $parent_path}})
-                MATCH (f:File {{path: $path}})
+                MATCH (f:File {{path: $file_path}})
                 MERGE (p)-[:CONTAINS]->(f)
-            """, parent_path=parent_path, path=file_path_str)
+            """, parent_path=parent_path, file_path=file_path_str)
 
             # CONTAINS relationships for functions, classes, and variables
             # To add a new language-specific node type (e.g., 'Trait' for Rust):
@@ -367,6 +414,22 @@ class GraphBuilder:
                 (file_data.get('unions',[]), 'Union'),
                 (file_data.get('records',[]), 'Record'),
                 (file_data.get('properties',[]), 'Property'),
+                # Infrastructure node types
+                (file_data.get('k8s_resources', []), 'K8sResource'),
+                (file_data.get('argocd_applications', []), 'ArgoCDApplication'),
+                (file_data.get('argocd_applicationsets', []), 'ArgoCDApplicationSet'),
+                (file_data.get('crossplane_xrds', []), 'CrossplaneXRD'),
+                (file_data.get('crossplane_compositions', []), 'CrossplaneComposition'),
+                (file_data.get('crossplane_claims', []), 'CrossplaneClaim'),
+                (file_data.get('kustomize_overlays', []), 'KustomizeOverlay'),
+                (file_data.get('helm_charts', []), 'HelmChart'),
+                (file_data.get('helm_values', []), 'HelmValues'),
+                (file_data.get('terraform_resources', []), 'TerraformResource'),
+                (file_data.get('terraform_variables', []), 'TerraformVariable'),
+                (file_data.get('terraform_outputs', []), 'TerraformOutput'),
+                (file_data.get('terraform_modules', []), 'TerraformModule'),
+                (file_data.get('terraform_data_sources', []), 'TerraformDataSource'),
+                (file_data.get('terragrunt_configs', []), 'TerragruntConfig'),
             ]
             for item_data, label in item_mappings:
                 for item in item_data:
@@ -374,22 +437,45 @@ class GraphBuilder:
                     if label == 'Function' and 'cyclomatic_complexity' not in item:
                         item['cyclomatic_complexity'] = 1 # Default value
 
-                    query = f"""
-                        MATCH (f:File {{path: $path}})
-                        MERGE (n:{label} {{name: $name, path: $path, line_number: $line_number}})
-                        SET n += $props
-                        MERGE (f)-[:CONTAINS]->(n)
-                    """
+                    # KuzuDB uses SET n += $props with schema filtering;
+                    # FalkorDB/Neo4j need individual SET clauses to avoid
+                    # map parameter serialization issues.
+                    is_kuzu = getattr(self.db_manager, 'get_backend_type', lambda: 'neo4j')() == 'kuzudb'
 
-                    session.run(query, path=file_path_str, name=item['name'], line_number=item['line_number'], props=item)
-                    
+                    if is_kuzu:
+                        query = f"""
+                            MATCH (f:File {{path: $file_path}})
+                            MERGE (n:{label} {{name: $name, path: $file_path, line_number: $line_number}})
+                            SET n += $props
+                            MERGE (f)-[:CONTAINS]->(n)
+                        """
+                        session.run(query, file_path=file_path_str, name=item['name'], line_number=item['line_number'], props=item)
+                    else:
+                        # Build individual SET clauses for FalkorDB/Neo4j
+                        skip_keys = {'name', 'line_number', 'path'}
+                        extra_keys = [k for k in item if k not in skip_keys]
+                        set_parts = [f"n.{k} = ${k}" for k in extra_keys]
+                        set_clause = f"SET {', '.join(set_parts)}" if set_parts else ""
+
+                        query = f"""
+                            MATCH (f:File {{path: $file_path}})
+                            MERGE (n:{label} {{name: $name, path: $file_path, line_number: $line_number}})
+                            {set_clause}
+                            MERGE (f)-[:CONTAINS]->(n)
+                        """
+                        params = {k: item[k] for k in extra_keys}
+                        params['file_path'] = file_path_str
+                        params['name'] = item['name']
+                        params['line_number'] = item['line_number']
+                        session.run(query, **params)
+
                     if label == 'Function':
                         for arg_name in item.get('args', []):
                             session.run("""
-                                MATCH (fn:Function {name: $func_name, path: $path, line_number: $line_number})
-                                MERGE (p:Parameter {name: $arg_name, path: $path, function_line_number: $line_number})
+                                MATCH (fn:Function {name: $func_name, path: $file_path, line_number: $line_number})
+                                MERGE (p:Parameter {name: $arg_name, path: $file_path, function_line_number: $line_number})
                                 MERGE (fn)-[:HAS_PARAMETER]->(p)
-                            """, func_name=item['name'], path=file_path_str, line_number=item['line_number'], arg_name=arg_name)
+                            """, func_name=item['name'], file_path=file_path_str, line_number=item['line_number'], arg_name=arg_name)
 
             # --- NEW: persist Ruby Modules ---
             for m in file_data.get('modules', []):
@@ -403,10 +489,10 @@ class GraphBuilder:
             for item in file_data.get('functions', []):
                 if item.get("context_type") == "function_definition":
                     session.run("""
-                        MATCH (outer:Function {name: $context, path: $path})
-                        MATCH (inner:Function {name: $name, path: $path, line_number: $line_number})
+                        MATCH (outer:Function {name: $context, path: $file_path})
+                        MATCH (inner:Function {name: $name, path: $file_path, line_number: $line_number})
                         MERGE (outer)-[:CONTAINS]->(inner)
-                    """, context=item["context"], path=file_path_str, name=item["name"], line_number=item["line_number"])
+                    """, context=item["context"], file_path=file_path_str, name=item["name"], line_number=item["line_number"])
 
             # Handle imports and create IMPORTS relationships
             for imp in file_data.get('imports', []):
@@ -417,19 +503,27 @@ class GraphBuilder:
                     module_name = imp.get('source')
                     if not module_name: continue
 
-                    # Use a map for relationship properties to handle optional alias and line_number
-                    rel_props = {'imported_name': imp.get('name', '*')}
+                    # Build individual SET clauses for relationship properties
+                    rel_params = {
+                        'file_path': file_path_str,
+                        'module_name': module_name,
+                        'imported_name': imp.get('name', '*'),
+                    }
+                    set_parts = ['r.imported_name = $imported_name']
                     if imp.get('alias'):
-                        rel_props['alias'] = imp.get('alias')
+                        rel_params['alias'] = imp['alias']
+                        set_parts.append('r.alias = $alias')
                     if imp.get('line_number'):
-                        rel_props['line_number'] = imp.get('line_number')
+                        rel_params['imp_line'] = imp['line_number']
+                        set_parts.append('r.line_number = $imp_line')
+                    set_clause = f"SET {', '.join(set_parts)}"
 
-                    session.run("""
-                        MATCH (f:File {path: $path})
-                        MERGE (m:Module {name: $module_name})
+                    session.run(f"""
+                        MATCH (f:File {{path: $file_path}})
+                        MERGE (m:Module {{name: $module_name}})
                         MERGE (f)-[r:IMPORTS]->(m)
-                        SET r += $props
-                    """, path=file_path_str, module_name=module_name, props=rel_props)
+                        {set_clause}
+                    """, **rel_params)
                 else:
                     # Existing logic for Python (and other languages)
                     # For KùzuDB, Module schema only has: name, lang, full_import_name.
@@ -448,18 +542,27 @@ class GraphBuilder:
                     if imp.get('alias'):
                         rel_props['alias'] = imp.get('alias')
                     
-                    # Ensure full_import_name is available in params for SET clause
-                    params = imp.copy()
-                    params['path'] = file_path_str
-                    params['rel_props'] = rel_props
-                    params['module_name'] = imp.get('name') # Use 'name' from imp as module name
+                    # Build params avoiding 'path' reserved word and map params
+                    params = {}
+                    params['file_path'] = file_path_str
+                    params['module_name'] = imp.get('name')
+                    # Set module properties from set_clause_str (if any)
+                    for k, v in imp.items():
+                        if k not in ('path', 'name'):
+                            params[k] = v
+
+                    # Build relationship SET from rel_props
+                    rel_set_parts = [f"r.{k} = ${k}_rel" for k in rel_props]
+                    rel_set_clause = f"SET {', '.join(rel_set_parts)}" if rel_set_parts else ""
+                    for k, v in rel_props.items():
+                        params[f"{k}_rel"] = v
 
                     session.run(f"""
-                        MATCH (f:File {{path: $path}})
+                        MATCH (f:File {{path: $file_path}})
                         MERGE (m:Module {{name: $module_name}})
                         {set_clause_str}
                         MERGE (f)-[r:IMPORTS]->(m)
-                        SET r += $rel_props
+                        {rel_set_clause}
                     """, **params)
 
 
@@ -467,24 +570,24 @@ class GraphBuilder:
             for func in file_data.get('functions', []):
                 if func.get('class_context'):
                     session.run("""
-                        MATCH (c:Class {name: $class_name, path: $path})
-                        MATCH (fn:Function {name: $func_name, path: $path, line_number: $func_line})
+                        MATCH (c:Class {name: $class_name, path: $file_path})
+                        MATCH (fn:Function {name: $func_name, path: $file_path, line_number: $func_line})
                         MERGE (c)-[:CONTAINS]->(fn)
-                    """, 
+                    """,
                     class_name=func['class_context'],
-                    path=file_path_str,
+                    file_path=file_path_str,
                     func_name=func['name'],
                     func_line=func['line_number'])
 
             # --- NEW: Class INCLUDES Module (Ruby mixins) ---
             for inc in file_data.get('module_inclusions', []):
                 session.run("""
-                    MATCH (c:Class {name: $class_name, path: $path})
+                    MATCH (c:Class {name: $class_name, path: $file_path})
                     MERGE (m:Module {name: $module_name})
                     MERGE (c)-[:INCLUDES]->(m)
                 """,
                 class_name=inc["class"],
-                path=file_path_str,
+                file_path=file_path_str,
                 module_name=inc["module"])
 
             # Class inheritance is handled in a separate pass after all files are processed.
@@ -741,6 +844,53 @@ class GraphBuilder:
                 debug_log(f"Processing file {idx+1}/{len(all_file_data)}: {file_data.get('path', 'unknown')}")
                 self._create_function_calls(session, file_data, imports_map)
 
+    def _create_all_infra_links(self, all_file_data: list[dict]) -> None:
+        """Create infrastructure relationships after all files are indexed.
+
+        Runs the same global Cypher queries as CrossRepoLinker.link_all(),
+        creating relationships like SELECTS, CONFIGURES, SOURCES_FROM,
+        RUNS_IMAGE, etc. Only runs if any infra nodes were parsed.
+
+        Args:
+            all_file_data: List of parsed file data dicts from indexing.
+        """
+        infra_keys = (
+            "k8s_resources",
+            "argocd_applications",
+            "argocd_applicationsets",
+            "crossplane_xrds",
+            "crossplane_compositions",
+            "crossplane_claims",
+            "kustomize_overlays",
+            "helm_charts",
+            "helm_values",
+            "terraform_resources",
+            "terraform_modules",
+            "terragrunt_configs",
+        )
+        has_infra = any(
+            item
+            for fd in all_file_data
+            for key in infra_keys
+            for item in fd.get(key, [])
+        )
+        if not has_infra:
+            return
+
+        info_logger("Creating infrastructure relationships...")
+        from .cross_repo_linker import CrossRepoLinker
+
+        linker = CrossRepoLinker(self.db_manager)
+        stats = linker.link_all()
+        total = sum(stats.values())
+        if total > 0:
+            info_logger(
+                f"Infrastructure linking: {total} relationships created "
+                f"({stats})"
+            )
+        else:
+            info_logger("Infrastructure linking: no relationships found")
+
     def _create_inheritance_links(self, session, file_data: Dict, imports_map: dict):
         """Create INHERITS relationships with a more robust resolution logic."""
         caller_file_path = str(Path(file_data['path']).resolve())
@@ -796,12 +946,12 @@ class GraphBuilder:
                 # If a path was found, create the relationship
                 if resolved_path:
                     session.run("""
-                        MATCH (child:Class {name: $child_name, path: $path})
+                        MATCH (child:Class {name: $child_name, path: $file_path})
                         MATCH (parent:Class {name: $parent_name, path: $resolved_parent_file_path})
                         MERGE (child)-[:INHERITS]->(parent)
                     """,
                     child_name=class_item['name'],
-                    path=caller_file_path,
+                    file_path=caller_file_path,
                     parent_name=target_class_name,
                     resolved_parent_file_path=resolved_path)
 
@@ -851,25 +1001,25 @@ class GraphBuilder:
                     if is_interface or (base_index > 0 and type_label == 'Class'):
                         # This is an IMPLEMENTS relationship
                         session.run("""
-                            MATCH (child {name: $child_name, path: $path})
+                            MATCH (child {name: $child_name, path: $file_path})
                             WHERE child:Class OR child:Struct OR child:Record
                             MATCH (iface:Interface {name: $interface_name})
                             MERGE (child)-[:IMPLEMENTS]->(iface)
                         """,
                         child_name=type_item['name'],
-                        path=caller_file_path,
+                        file_path=caller_file_path,
                         interface_name=base_name)
                     else:
                         # This is an INHERITS relationship
                         session.run("""
-                            MATCH (child {name: $child_name, path: $path})
+                            MATCH (child {name: $child_name, path: $file_path})
                             WHERE child:Class OR child:Record OR child:Interface
                             MATCH (parent {name: $parent_name})
                             WHERE parent:Class OR parent:Record OR parent:Interface
                             MERGE (child)-[:INHERITS]->(parent)
                         """,
                         child_name=type_item['name'],
-                        path=caller_file_path,
+                        file_path=caller_file_path,
                         parent_name=base_name)
 
     def _create_all_inheritance_links(self, all_file_data: list[Dict], imports_map: dict):
@@ -887,41 +1037,41 @@ class GraphBuilder:
         file_path_str = str(Path(path).resolve())
         with self.driver.session() as session:
             parents_res = session.run("""
-                MATCH (f:File {path: $path})<-[:CONTAINS*]-(d:Directory)
+                MATCH (f:File {path: $file_path})<-[:CONTAINS*]-(d:Directory)
                 RETURN d.path as path ORDER BY d.path DESC
-            """, path=file_path_str)
+            """, file_path=file_path_str)
             parent_paths = [record["path"] for record in parents_res]
 
             session.run(
                 """
-                MATCH (f:File {path: $path})
+                MATCH (f:File {path: $file_path})
                 OPTIONAL MATCH (f)-[:CONTAINS]->(element)
                 DETACH DELETE f, element
                 """,
-                path=file_path_str,
+                file_path=file_path_str,
             )
             info_logger(f"Deleted file and its elements from graph: {file_path_str}")
 
-            for path in parent_paths:
+            for dir_path in parent_paths:
                 session.run("""
-                    MATCH (d:Directory {path: $path})
+                    MATCH (d:Directory {path: $dir_path})
                     WHERE NOT (d)-[:CONTAINS]->()
                     DETACH DELETE d
-                """, path=path)
+                """, dir_path=dir_path)
 
     def delete_repository_from_graph(self, repo_path: str) -> bool:
         """Deletes a repository and all its contents from the graph. Returns True if deleted, False if not found."""
         repo_path_str = str(Path(repo_path).resolve())
         with self.driver.session() as session:
             # Check if it exists
-            result = session.run("MATCH (r:Repository {path: $path}) RETURN count(r) as cnt", path=repo_path_str).single()
+            result = session.run("MATCH (r:Repository {path: $repo_path}) RETURN count(r) as cnt", repo_path=repo_path_str).single()
             if not result or result["cnt"] == 0:
                 warning_logger(f"Attempted to delete non-existent repository: {repo_path_str}")
                 return False
 
-            session.run("""MATCH (r:Repository {path: $path})
+            session.run("""MATCH (r:Repository {path: $repo_path})
                           OPTIONAL MATCH (r)-[:CONTAINS*]->(e)
-                          DETACH DELETE r, e""", path=repo_path_str)
+                          DETACH DELETE r, e""", repo_path=repo_path_str)
             info_logger(f"Deleted repository and its contents from graph: {repo_path_str}")
             return True
 
@@ -1440,6 +1590,7 @@ class GraphBuilder:
             link_start = _time.monotonic()
             self._create_all_inheritance_links(all_file_data, imports_map)
             self._create_all_function_calls(all_file_data, imports_map)
+            self._create_all_infra_links(all_file_data)
             link_elapsed = _time.monotonic() - link_start
             info_logger(f"Link creation done in {link_elapsed:.1f}s")
             

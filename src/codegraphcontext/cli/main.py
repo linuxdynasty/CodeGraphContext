@@ -2173,6 +2173,202 @@ def watch_abbrev(path: str = typer.Argument(".", help="Path to watch")):
 
 
 
+# --- Ecosystem command group ---
+ecosystem_app = typer.Typer(
+    name="ecosystem",
+    help="Ecosystem-level indexing and querying across multiple repos.",
+)
+app.add_typer(ecosystem_app, name="ecosystem")
+
+
+@ecosystem_app.command("index")
+def ecosystem_index(
+    manifest: str = typer.Argument(..., help="Path to dependency-graph.yaml manifest."),
+    base_path: str = typer.Option("", "--base-path", "-b", help="Base directory where repos are cloned."),
+    force: bool = typer.Option(False, "--force", "-f", help="Force re-index all repos."),
+    parallel: int = typer.Option(4, "--parallel", "-p", help="Max concurrent repo indexing."),
+    clone_missing: bool = typer.Option(False, "--clone-missing", help="Clone missing repos via gh CLI."),
+):
+    """Index all repos in an ecosystem manifest."""
+    if not base_path:
+        base_path = config_manager.get_config_value("ECOSYSTEM_BASE_PATH") or ""
+    if not base_path:
+        console.print("[red]Error: --base-path required (or set ECOSYSTEM_BASE_PATH in config)[/red]")
+        raise typer.Exit(1)
+
+    from codegraphcontext.core.ecosystem_indexer import EcosystemIndexer
+    from codegraphcontext.core.jobs import JobManager
+
+    graph_builder, _, _, loop = _initialize_services()
+    job_manager = JobManager()
+    indexer = EcosystemIndexer(graph_builder, job_manager)
+
+    result = loop.run_until_complete(
+        indexer.index_ecosystem(
+            manifest_path=manifest,
+            base_path=base_path,
+            force=force,
+            parallel=parallel,
+            clone_missing=clone_missing,
+        )
+    )
+
+    console.print(f"\n[bold green]Ecosystem: {result.get('ecosystem', 'unknown')}[/bold green]")
+    console.print(f"Total repos: {result.get('total_repos', 0)}")
+    console.print(f"Indexed: {len(result.get('indexed', []))}")
+    console.print(f"Skipped: {len(result.get('skipped', []))}")
+    console.print(f"Failed: {len(result.get('failed', []))}")
+
+    if result.get("missing_repos"):
+        console.print(f"\n[yellow]Missing repos: {', '.join(result['missing_repos'])}[/yellow]")
+    if result.get("failed"):
+        for f in result["failed"]:
+            console.print(f"[red]  Failed: {f['name']}: {f['error']}[/red]")
+
+
+@ecosystem_app.command("status")
+def ecosystem_status():
+    """Show per-repo indexing status."""
+    from codegraphcontext.core.ecosystem_indexer import EcosystemIndexer
+    from codegraphcontext.core.jobs import JobManager
+
+    graph_builder, _, _, _ = _initialize_services()
+    indexer = EcosystemIndexer(graph_builder, JobManager())
+    status = indexer.get_status()
+
+    if not status.get("repos"):
+        console.print("[yellow]No ecosystem repos indexed yet.[/yellow]")
+        return
+
+    table = Table(title="Ecosystem Indexing Status", box=box.ROUNDED)
+    table.add_column("Repository", style="cyan")
+    table.add_column("Status", style="green")
+    table.add_column("Commit", style="dim")
+    table.add_column("Files")
+    table.add_column("Last Indexed", style="dim")
+
+    for name, info in sorted(status["repos"].items()):
+        status_style = {"indexed": "green", "failed": "red", "pending": "yellow"}.get(info["status"], "white")
+        table.add_row(
+            name,
+            f"[{status_style}]{info['status']}[/{status_style}]",
+            info.get("last_commit", ""),
+            str(info.get("files", "")),
+            info.get("last_indexed", "")[:19] if info.get("last_indexed") else "",
+        )
+
+    console.print(table)
+
+
+@ecosystem_app.command("update")
+def ecosystem_update(
+    manifest: str = typer.Argument(..., help="Path to dependency-graph.yaml manifest."),
+    base_path: str = typer.Option("", "--base-path", "-b", help="Base directory where repos are cloned."),
+    parallel: int = typer.Option(4, "--parallel", "-p", help="Max concurrent repo indexing."),
+):
+    """Incremental update: re-index only stale repos."""
+    if not base_path:
+        base_path = config_manager.get_config_value("ECOSYSTEM_BASE_PATH") or ""
+    if not base_path:
+        console.print("[red]Error: --base-path required[/red]")
+        raise typer.Exit(1)
+
+    from codegraphcontext.core.ecosystem_indexer import EcosystemIndexer
+    from codegraphcontext.core.jobs import JobManager
+
+    graph_builder, _, _, loop = _initialize_services()
+    indexer = EcosystemIndexer(graph_builder, JobManager())
+
+    result = loop.run_until_complete(
+        indexer.update_ecosystem(
+            manifest_path=manifest,
+            base_path=base_path,
+            parallel=parallel,
+        )
+    )
+
+    console.print(f"Updated: {len(result.get('updated', []))}")
+    console.print(f"Skipped: {len(result.get('skipped', []))}")
+
+
+@ecosystem_app.command("link")
+def ecosystem_link():
+    """Build cross-repo relationships after indexing."""
+    from codegraphcontext.tools.cross_repo_linker import CrossRepoLinker
+
+    graph_builder, _, _, _ = _initialize_services()
+    linker = CrossRepoLinker(graph_builder.db_manager)
+    stats = linker.link_all()
+
+    table = Table(title="Cross-Repo Relationships Created", box=box.ROUNDED)
+    table.add_column("Relationship", style="cyan")
+    table.add_column("Count", style="green")
+
+    for rel_type, count in sorted(stats.items()):
+        table.add_row(rel_type, str(count))
+
+    console.print(table)
+
+
+@ecosystem_app.command("overview")
+def ecosystem_overview():
+    """Show ecosystem overview with stats."""
+    graph_builder, _, _, _ = _initialize_services()
+    from codegraphcontext.tools.handlers import ecosystem_handlers
+    result = ecosystem_handlers.get_ecosystem_overview(graph_builder.db_manager)
+
+    eco = result.get("ecosystem", {})
+    console.print(f"\n[bold cyan]Ecosystem: {eco.get('name', 'N/A')}[/bold cyan]")
+    console.print(f"Organization: {eco.get('org', 'N/A')}\n")
+
+    if result.get("tiers"):
+        table = Table(title="Tiers", box=box.ROUNDED)
+        table.add_column("Tier", style="cyan")
+        table.add_column("Risk", style="yellow")
+        table.add_column("Repos")
+        for t in result["tiers"]:
+            table.add_row(t["tier"], t.get("risk", ""), ", ".join(t.get("repos", [])))
+        console.print(table)
+
+    infra = result.get("infrastructure_counts", {})
+    if infra:
+        console.print("\n[bold]Infrastructure Counts:[/bold]")
+        for k, v in infra.items():
+            console.print(f"  {k}: {v}")
+
+
+@ecosystem_app.command("query")
+def ecosystem_query(
+    query_type: str = typer.Argument(..., help="Query type: trace, blast-radius, search, relationships"),
+    target: str = typer.Argument("", help="Target name for the query."),
+    category: str = typer.Option("", "--category", "-c", help="Resource category filter."),
+    target_type: str = typer.Option("repository", "--type", "-t", help="Target type for blast-radius."),
+    rel_query: str = typer.Option("", "--rel", "-r", help="Relationship query type."),
+):
+    """Run ecosystem queries."""
+    graph_builder, _, _, _ = _initialize_services()
+    from codegraphcontext.tools.handlers import ecosystem_handlers
+
+    if query_type == "trace":
+        result = ecosystem_handlers.trace_deployment_chain(graph_builder.db_manager, target)
+    elif query_type in ("blast-radius", "blast_radius"):
+        result = ecosystem_handlers.find_blast_radius(graph_builder.db_manager, target, target_type)
+    elif query_type == "search":
+        result = ecosystem_handlers.find_infra_resources(graph_builder.db_manager, target, category)
+    elif query_type == "relationships":
+        if not rel_query:
+            console.print("[red]--rel required for relationships query[/red]")
+            raise typer.Exit(1)
+        result = ecosystem_handlers.analyze_infra_relationships(graph_builder.db_manager, rel_query, target)
+    elif query_type == "summary":
+        result = ecosystem_handlers.get_repo_summary(graph_builder.db_manager, target)
+    else:
+        console.print(f"[red]Unknown query type: {query_type}[/red]")
+        raise typer.Exit(1)
+
+    console.print_json(json.dumps(result, indent=2, default=str))
+
+
 @app.command()
 def help(ctx: typer.Context):
     """Show the main help message and exit."""
