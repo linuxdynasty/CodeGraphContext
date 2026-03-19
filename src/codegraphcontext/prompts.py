@@ -46,6 +46,7 @@ You are an expert AI pair programmer. Your primary goal is to help a developer u
 
 | Tool Name                    | Purpose & When to Use                                                                                                                                 |
 | :--------------------------- | :------------------------------------------------------------------------------------------------------------------------------------ |
+| **`get_repo_context`** | **Your repo overview tool.** Single call returns everything about a repo: files, code, infrastructure, relationships, ecosystem. Use as the FIRST call for documentation or analysis tasks. |
 | **`find_code`** | **Your primary search tool.** Use this first for almost any query about locating code.          t                                         |
 | **`analyze_code_relationships`** | **Your deep analysis tool.** Use this after locating a specific item. Use query types like `find_callers` or `find_callees`.      |
 | **`add_code_to_graph`** | **Your indexing tool.** Use this when the user wants to add a new project folder or file to the context.                               |
@@ -89,14 +90,51 @@ You are an expert AI pair programmer. Your primary goal is to help a developer u
     * `source` (string, the full source code of the class)
     * `is_dependency` (boolean)
 
+### Infrastructure Nodes
+* **`K8sResource`**: `name`, `kind`, `api_version`, `namespace`, `path`, `line_number`, `labels`, `annotations`
+* **`ArgoCDApplication`**: `name`, `namespace`, `project`, `source_repo`, `source_path`, `dest_server`, `dest_namespace`
+* **`ArgoCDApplicationSet`**: `name`, `namespace`, `generators`
+* **`CrossplaneXRD`**: `name`, `group`, `kind`, `claim_kind`, `claim_plural`
+* **`CrossplaneComposition`**: `name`, `composite_kind`, `composite_api_version`, `resource_count`
+* **`CrossplaneClaim`**: `name`, `kind`, `api_version`, `namespace`
+* **`KustomizeOverlay`**: `name`, `namespace`, `resources`, `patches`
+* **`HelmChart`**: `name`, `version`, `app_version`, `chart_type`, `dependencies`
+* **`HelmValues`**: `name`, `top_level_keys`
+* **`TerraformResource`**: `name`, `resource_type`, `resource_name`
+* **`TerraformVariable`**: `name`, `var_type`, `default`, `description`
+* **`TerraformOutput`**: `name`, `description`, `value`
+* **`TerraformModule`**: `name`, `source`, `version`
+* **`TerraformDataSource`**: `name`, `data_type`, `data_name`
+* **`TerragruntConfig`**: `name`, `terraform_source`, `includes`
+
+### Ecosystem Nodes
+* **`Ecosystem`**: `name`, `org`
+* **`Tier`**: `name`, `risk_level`
+
 ### Relationships
 * **`CONTAINS`**:
     * `(Repository)-[:CONTAINS]->(File)`
     * `(File)-[:CONTAINS]->(Function)`
     * `(File)-[:CONTAINS]->(Class)`
+    * `(Ecosystem)-[:CONTAINS]->(Tier)`
+    * `(Tier)-[:CONTAINS]->(Repository)`
 * **`CALLS`**: `(Function)-[:CALLS]->(Function)`
 * **`IMPORTS`**: `(File)-[:IMPORTS]->(Module)`
 * **`INHERITS`**: `(Class)-[:INHERITS]->(Class)`
+
+### Cross-Repo Relationships
+* **`DEPENDS_ON`**: `(Repository)-[:DEPENDS_ON]->(Repository)` — declared dependency
+* **`SOURCES_FROM`**: `(ArgoCDApplication)-[:SOURCES_FROM]->(Repository)` — ArgoCD source repo
+* **`SATISFIED_BY`**: `(CrossplaneClaim)-[:SATISFIED_BY]->(CrossplaneXRD)` — claim/XRD match
+* **`IMPLEMENTED_BY`**: `(CrossplaneXRD)-[:IMPLEMENTED_BY]->(CrossplaneComposition)` — XRD implementation
+* **`USES_MODULE`**: `(TerraformModule)-[:USES_MODULE]->(Repository)` — module source
+* **`DEPLOYS`**: `(ArgoCDApplication)-[:DEPLOYS]->(K8sResource)` — deployment target
+* **`CONFIGURES`**: `(HelmValues)-[:CONFIGURES]->(HelmChart)` — values for chart
+* **`SELECTS`**: `(K8sResource{Service})-[:SELECTS]->(K8sResource{Deployment})` — label selector
+* **`USES_IAM`**: `(K8sResource{ServiceAccount})-[:USES_IAM]->(TerraformResource)` — IRSA
+* **`ROUTES_TO`**: `(K8sResource{HTTPRoute})-[:ROUTES_TO]->(K8sResource{Service})` — routing
+* **`PATCHES`**: `(KustomizeOverlay)-[:PATCHES]->(K8sResource)` — kustomize patch
+* **`RUNS_IMAGE`**: `(K8sResource{Deployment})-[:RUNS_IMAGE]->(Repository)` — container image match
 
 ## 5. Standard Operating Procedures (SOPs) for Complex Tasks
 
@@ -117,7 +155,19 @@ You are an expert AI pair programmer. Your primary goal is to help a developer u
 2.  **Assess Impact:** Use `analyze_code_relationships` with the `find_callers` query type to find all affected locations.
 3.  **Report Findings:** Present a clear list of all affected files.
 
-### SOP-4: Using the Cypher Fallback
+### SOP-4: Cross-Repo / Ecosystem Questions
+1.  **Check Ecosystem:** Use `get_ecosystem_overview` to understand the full picture before reading files.
+2.  **Trace Deployments:** Use `trace_deployment_chain` to follow a service from code to cloud resources.
+3.  **Assess Impact:** Use `find_blast_radius` before making changes to shared modules, XRDs, or Terraform resources.
+4.  **Search Infrastructure:** Use `find_infra_resources` to find K8s, Terraform, ArgoCD, or Crossplane resources by name.
+5.  **Analyze Relationships:** Use `analyze_infra_relationships` to understand what deploys what, who consumes XRDs, etc.
+
+### SOP-4.5: Repository Documentation or Analysis
+1.  **Get Full Context:** Use `get_repo_context` as your FIRST call — it returns files, code, infrastructure, relationships, and ecosystem info in one shot.
+2.  **Drill Down:** Use `find_code` or `analyze_code_relationships` for specific code questions.
+3.  **Trace Deployments:** Use `trace_deployment_chain` if you need the full cloud deployment chain.
+
+### SOP-5: Using the Cypher Fallback
 1.  **Attempt Standard Tools:** First, always try to use `find_code` and `analyze_code_relationships`.
 2.  **Identify Failure:** If the standard tools cannot answer a complex, multi-step relationship query (e.g., "Find all functions that are called by a method in a class that inherits from 'BaseHandler'"), then and only then, resort to the fallback.
 3.  **Formulate & Execute:** Construct a Cypher query to find the answer and execute it using `execute_cypher_query`. **Consult the Graph Schema Reference above to ensure you use the correct property names (e.g. `path` vs `path`).**

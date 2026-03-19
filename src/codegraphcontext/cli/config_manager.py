@@ -38,12 +38,19 @@ DEFAULT_CONFIG = {
     "MAX_DEPTH": "unlimited",
     "PARALLEL_WORKERS": "4",
     "CACHE_ENABLED": "true",
-    "IGNORE_DIRS": "node_modules,venv,.venv,env,.env,dist,build,target,out,.git,.idea,.vscode,__pycache__",
+    "IGNORE_DIRS": "node_modules,venv,.venv,env,.env,dist,build,target,out,.git,.idea,.vscode,__pycache__,.terraform,.terragrunt-cache",
     "INDEX_SOURCE": "true",
     # SCIP indexer feature flag (default off — existing Tree-sitter behaviour unchanged)
     "SCIP_INDEXER": "false",
     "SCIP_LANGUAGES": "python,typescript,go,rust,java",
     "SKIP_EXTERNAL_RESOLUTION": "false",
+    # Infrastructure indexing
+    "INDEX_YAML": "true",
+    "INDEX_HCL": "true",
+    # Ecosystem settings
+    "ECOSYSTEM_MANIFEST_PATH": "",
+    "ECOSYSTEM_BASE_PATH": "",
+    "ECOSYSTEM_PARALLEL_REPOS": "4",
 }
 
 # Configuration key descriptions
@@ -71,6 +78,11 @@ CONFIG_DESCRIPTIONS = {
     "SCIP_INDEXER": "Use SCIP-based indexing for higher accuracy call/inheritance resolution (requires scip-<lang> tools installed)",
     "SCIP_LANGUAGES": "Comma-separated languages to index via SCIP when SCIP_INDEXER=true (python,typescript,go,rust,java)",
     "SKIP_EXTERNAL_RESOLUTION": "Skip resolution attempts for external library method calls (recommended for enterprise large Java/Spring codebases)",
+    "INDEX_YAML": "Index YAML infrastructure files (K8s, ArgoCD, Crossplane, Helm, Kustomize)",
+    "INDEX_HCL": "Index HCL/Terraform infrastructure files (.tf, .hcl)",
+    "ECOSYSTEM_MANIFEST_PATH": "Path to ecosystem dependency-graph.yaml manifest",
+    "ECOSYSTEM_BASE_PATH": "Base directory where ecosystem repos are cloned",
+    "ECOSYSTEM_PARALLEL_REPOS": "Number of repos to index in parallel during ecosystem indexing",
 }
 
 # Valid values for each config key
@@ -88,6 +100,8 @@ CONFIG_VALIDATORS = {
     "INDEX_SOURCE": ["true", "false"],
     "SCIP_INDEXER": ["true", "false"],
     "SKIP_EXTERNAL_RESOLUTION": ["true", "false"],
+    "INDEX_YAML": ["true", "false"],
+    "INDEX_HCL": ["true", "false"],
 }
 def ensure_config_dir(path: Path = CONFIG_DIR):
     """

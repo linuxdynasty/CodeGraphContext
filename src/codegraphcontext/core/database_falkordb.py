@@ -352,10 +352,17 @@ class FalkorDBSessionWrapper:
         except Exception as e:
             # Ignore errors about existing constraints/indexes
             error_msg = str(e).lower()
-            if "already exists" in error_msg or "already created" in error_msg:
+            if (
+                "already exists" in error_msg
+                or "already created" in error_msg
+                or "invalid constraint" in error_msg
+            ):
                 return FalkorDBResultWrapper(None)
-                
-            error_logger(f"FalkorDB query failed: {query[:100]}... Error: {e}")
+
+            error_logger(
+                f"FalkorDB query failed: {query[:200]}... "
+                f"Error: {e}"
+            )
             raise
 
     def _translate_schema_query(self, query: str) -> str:
@@ -370,19 +377,22 @@ class FalkorDBSessionWrapper:
         if "CREATE CONSTRAINT" in q_upper:
             # Remove "IF NOT EXISTS"
             query = re.sub(r'\s+IF NOT EXISTS', '', query, flags=re.IGNORECASE)
-            
-            # Handle composite keys: (n.p1, n.p2) -> downgrade to INDEX
-            if "," in query:
-                match_node = re.search(r'FOR\s+(\([^)]+\))', query, flags=re.IGNORECASE)
-                match_props = re.search(r'REQUIRE\s+(\([^)]+\))\s+IS UNIQUE', query, flags=re.IGNORECASE)
-                
-                if match_node and match_props:
-                    return f"CREATE INDEX FOR {match_node.group(1)} ON {match_props.group(1)}"
 
-            # Handle simple uniqueness: CREATE CONSTRAINT name FOR (n:Label) REQUIRE n.prop IS UNIQUE
-            # TO: CREATE CONSTRAINT ON (n:Label) ASSERT n.prop IS UNIQUE
-            
-            # Remove constraint name
+            # Handle composite keys: (n.p1, n.p2) -> downgrade to INDEX
+            match_node = re.search(r'FOR\s+(\([^)]+\))', query, flags=re.IGNORECASE)
+            match_props_composite = re.search(r'REQUIRE\s+(\([^)]+\))\s+IS UNIQUE', query, flags=re.IGNORECASE)
+
+            if match_node and match_props_composite:
+                return f"CREATE INDEX FOR {match_node.group(1)} ON {match_props_composite.group(1)}"
+
+            # Handle single-property uniqueness: downgrade to INDEX
+            # FalkorDB does not support CREATE CONSTRAINT ... ASSERT for single properties
+            match_prop_single = re.search(r'REQUIRE\s+(\S+)\s+IS UNIQUE', query, flags=re.IGNORECASE)
+            if match_node and match_prop_single:
+                prop = match_prop_single.group(1)
+                return f"CREATE INDEX FOR {match_node.group(1)} ON ({prop})"
+
+            # Fallback: translate constraint syntax
             query = re.sub(r'CREATE CONSTRAINT\s+\w+\s+', 'CREATE CONSTRAINT ', query, flags=re.IGNORECASE)
             query = re.sub(r'\s+FOR\s+', ' ON ', query, flags=re.IGNORECASE)
             query = re.sub(r'\s+REQUIRE\s+', ' ASSERT ', query, flags=re.IGNORECASE)

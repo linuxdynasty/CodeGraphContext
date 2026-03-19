@@ -27,11 +27,14 @@ from .utils.debug_log import debug_log, info_logger, error_logger, warning_logge
 from .tool_definitions import TOOLS
 from .tools.handlers import (
     analysis_handlers,
+    ecosystem_handlers,
     indexing_handlers,
     management_handlers,
     query_handlers,
-    watcher_handlers
+    watcher_handlers,
 )
+from .core.ecosystem_indexer import EcosystemIndexer
+from .tools.cross_repo_linker import CrossRepoLinker
 
 DEFAULT_EDIT_DISTANCE = 2
 DEFAULT_FUZZY_SEARCH = False
@@ -80,7 +83,9 @@ class MCPServer:
         self.graph_builder = GraphBuilder(self.db_manager, self.job_manager, loop)
         self.code_finder = CodeFinder(self.db_manager)
         self.code_watcher = CodeWatcher(self.graph_builder, self.job_manager)
-        
+        self.ecosystem_indexer = EcosystemIndexer(self.graph_builder, self.job_manager)
+        self.cross_repo_linker = CrossRepoLinker(self.db_manager)
+
         # Define the tool manifest that will be exposed to the AI assistant.
         self._init_tools()
 
@@ -173,6 +178,37 @@ class MCPServer:
     def get_repository_stats_tool(self, **args) -> Dict[str, Any]:
         return management_handlers.get_repository_stats(self.code_finder, **args)
 
+    # --- Ecosystem Tool Wrappers ---
+
+    async def index_ecosystem_tool(self, **args) -> Dict[str, Any]:
+        return await self.ecosystem_indexer.index_ecosystem(**args)
+
+    def ecosystem_status_tool(self) -> Dict[str, Any]:
+        return self.ecosystem_indexer.get_status()
+
+    def get_ecosystem_overview_tool(self) -> Dict[str, Any]:
+        return ecosystem_handlers.get_ecosystem_overview(self.db_manager)
+
+    def trace_deployment_chain_tool(self, **args) -> Dict[str, Any]:
+        return ecosystem_handlers.trace_deployment_chain(self.db_manager, **args)
+
+    def find_blast_radius_tool(self, **args) -> Dict[str, Any]:
+        return ecosystem_handlers.find_blast_radius(self.db_manager, **args)
+
+    def find_infra_resources_tool(self, **args) -> Dict[str, Any]:
+        return ecosystem_handlers.find_infra_resources(self.db_manager, **args)
+
+    def analyze_infra_relationships_tool(self, **args) -> Dict[str, Any]:
+        return ecosystem_handlers.analyze_infra_relationships(self.db_manager, **args)
+
+    def get_repo_summary_tool(self, **args) -> Dict[str, Any]:
+        return ecosystem_handlers.get_repo_summary(self.db_manager, **args)
+
+    def get_repo_context_tool(self, **args) -> Dict[str, Any]:
+        return ecosystem_handlers.get_repo_context(self.db_manager, **args)
+
+    def link_ecosystem_tool(self) -> Dict[str, Any]:
+        return self.cross_repo_linker.link_all()
 
     async def handle_tool_call(self, tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -197,8 +233,27 @@ class MCPServer:
             "unwatch_directory": self.unwatch_directory_tool,
             "load_bundle": self.load_bundle_tool,
             "search_registry_bundles": self.search_registry_bundles_tool,
-            "get_repository_stats": self.get_repository_stats_tool
+            "get_repository_stats": self.get_repository_stats_tool,
+            # Ecosystem tools
+            "ecosystem_status": self.ecosystem_status_tool,
+            "get_ecosystem_overview": self.get_ecosystem_overview_tool,
+            "trace_deployment_chain": self.trace_deployment_chain_tool,
+            "find_blast_radius": self.find_blast_radius_tool,
+            "find_infra_resources": self.find_infra_resources_tool,
+            "analyze_infra_relationships": self.analyze_infra_relationships_tool,
+            "get_repo_summary": self.get_repo_summary_tool,
+            "get_repo_context": self.get_repo_context_tool,
+            "link_ecosystem": self.link_ecosystem_tool,
         }
+        # Async tools that must run directly on the event loop
+        async_tools = {
+            "index_ecosystem": self.index_ecosystem_tool,
+        }
+
+        async_handler = async_tools.get(tool_name)
+        if async_handler:
+            return await async_handler(**args)
+
         handler = tool_map.get(tool_name)
         if handler:
             # Run the synchronous tool function in a separate thread to avoid
