@@ -3,6 +3,7 @@ import pytest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 from codegraphcontext.server import MCPServer
+from starlette.testclient import TestClient
 
 class TestMCPServer:
     """
@@ -67,6 +68,101 @@ class TestMCPServer:
                 # We can't strictly assert called_once because arguments are complex (bound methods)
                 # But we can check result
                 assert result == {"job_id": "123"}
-        
+
         asyncio.run(run_test())
+
+
+class TestSSETransport:
+    """Tests for the SSE HTTP transport exposed by run_sse()."""
+
+    @pytest.fixture
+    def sse_client(self):
+        """Build a FastAPI TestClient around the SSE app without starting uvicorn."""
+        from fastapi import FastAPI, Request
+        from fastapi.responses import JSONResponse, StreamingResponse
+        from starlette.responses import Response
+        import json
+
+        with patch('codegraphcontext.server.get_database_manager') as mock_get_db:
+            mock_db = MagicMock()
+            mock_get_db.return_value = mock_db
+
+            with patch('codegraphcontext.server.JobManager'), \
+                 patch('codegraphcontext.server.GraphBuilder'), \
+                 patch('codegraphcontext.server.CodeFinder'), \
+                 patch('codegraphcontext.server.CodeWatcher'):
+
+                server = MCPServer()
+
+        # Build the same FastAPI app that run_sse() creates
+        app = FastAPI()
+
+        @app.get("/health")
+        async def health():
+            return {"status": "ok"}
+
+        @app.post("/message")
+        async def message(request: Request):
+            try:
+                body = await request.json()
+            except (json.JSONDecodeError, ValueError):
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "jsonrpc": "2.0", "id": None,
+                        "error": {"code": -32700, "message": "Parse error"}
+                    },
+                )
+            response, status_code = await server._handle_jsonrpc_request(body)
+            if response is None:
+                return Response(status_code=204)
+            return JSONResponse(content=response, status_code=status_code)
+
+        return TestClient(app)
+
+    def test_sse_health(self, sse_client):
+        """GET /health returns 200 + status ok."""
+        resp = sse_client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+
+    def test_sse_initialize(self, sse_client):
+        """POST /message with initialize returns server info."""
+        resp = sse_client.post("/message", json={
+            "jsonrpc": "2.0", "id": 1, "method": "initialize"
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == 1
+        assert data["result"]["serverInfo"]["name"] == "CodeGraphContext"
+
+    def test_sse_tools_list(self, sse_client):
+        """POST /message with tools/list returns tools."""
+        resp = sse_client.post("/message", json={
+            "jsonrpc": "2.0", "id": 2, "method": "tools/list"
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "tools" in data["result"]
+        assert isinstance(data["result"]["tools"], list)
+
+    def test_sse_notification_returns_204(self, sse_client):
+        """POST /message with a notification (no id) returns 204."""
+        resp = sse_client.post("/message", json={
+            "jsonrpc": "2.0", "method": "notifications/initialized"
+        })
+        assert resp.status_code == 204
+        assert resp.content == b""
+
+    def test_sse_malformed_json_returns_400(self, sse_client):
+        """POST /message with non-JSON body returns 400 + parse error."""
+        resp = sse_client.post(
+            "/message",
+            content=b"not json",
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+        data = resp.json()
+        assert data["error"]["code"] == -32700
+        assert "Parse error" in data["error"]["message"]
 

@@ -207,77 +207,85 @@ class MCPServer:
         else:
             return {"error": f"Unknown tool: {tool_name}"}
 
+    async def _handle_jsonrpc_request(self, body: dict) -> tuple:
+        """
+        Shared JSON-RPC routing logic used by both stdio and SSE transports.
+
+        Returns (response_dict, status_code) or (None, 204) for notifications.
+        """
+        method = body.get("method")
+        params = body.get("params", {})
+        request_id = body.get("id")
+
+        if request_id is not None:
+            info_logger(f"JSON-RPC request method={method} id={request_id}")
+        else:
+            debug_logger(f"JSON-RPC notification method={method}")
+
+        if method == "initialize":
+            return {
+                "jsonrpc": "2.0", "id": request_id,
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {
+                        "name": "CodeGraphContext", "version": "0.1.0",
+                        "systemPrompt": LLM_SYSTEM_PROMPT
+                    },
+                    "capabilities": {"tools": {"listTools": True}},
+                }
+            }, 200
+
+        if method == "tools/list":
+            return {
+                "jsonrpc": "2.0", "id": request_id,
+                "result": {"tools": list(self.tools.values())}
+            }, 200
+
+        if method == "tools/call":
+            tool_name = params.get("name")
+            args = params.get("arguments", {})
+            info_logger(f"tools/call -> {tool_name} args={list(args.keys())}")
+            result = await self.handle_tool_call(tool_name, args)
+            if "error" in result:
+                return {
+                    "jsonrpc": "2.0", "id": request_id,
+                    "error": {"code": -32000, "message": "Tool execution error", "data": result}
+                }, 200
+            return {
+                "jsonrpc": "2.0", "id": request_id,
+                "result": {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
+            }, 200
+
+        # Notifications (no id) — e.g. notifications/initialized
+        if request_id is None:
+            return None, 204
+
+        # Unknown method with an id — return method-not-found error
+        return {
+            "jsonrpc": "2.0", "id": request_id,
+            "error": {"code": -32601, "message": f"Method not found: {method}"}
+        }, 200
+
     async def run(self):
         """
         Runs the main server loop, listening for JSON-RPC requests from stdin.
         """
-        # info_logger("MCP Server is running. Waiting for requests...")
         print("MCP Server is running. Waiting for requests...", file=sys.stderr, flush=True)
         self.code_watcher.start()
-        
+
         loop = asyncio.get_event_loop()
         while True:
             try:
-                # Read a request from the standard input.
                 line = await loop.run_in_executor(None, sys.stdin.readline)
                 if not line:
                     debug_logger("Client disconnected (EOF received). Shutting down.")
                     break
-                
+
                 request = json.loads(line.strip())
-                method = request.get('method')
-                params = request.get('params', {})
-                request_id = request.get('id')
-                
-                response = {}
-                # Route the request based on the JSON-RPC method.
-                if method == 'initialize':
-                    response = {
-                        "jsonrpc": "2.0", "id": request_id,
-                        "result": {
-                            "protocolVersion": "2025-03-26",
-                            "serverInfo": {
-                                "name": "CodeGraphContext", "version": "0.1.0",
-                                "systemPrompt": LLM_SYSTEM_PROMPT
-                            },
-                            "capabilities": {"tools": {"listTools": True}},
-                        }
-                    }
-                elif method == 'tools/list':
-                    # Return the list of tools defined in _init_tools.
-                    response = {
-                        "jsonrpc": "2.0", "id": request_id,
-                        "result": {"tools": list(self.tools.values())}
-                    }
-                elif method == 'tools/call':
-                    # Execute a tool call and return the result.
-                    tool_name = params.get('name')
-                    args = params.get('arguments', {})
-                    result = await self.handle_tool_call(tool_name, args)
-                    
-                    if "error" in result:
-                        response = {
-                            "jsonrpc": "2.0", "id": request_id,
-                            "error": {"code": -32000, "message": "Tool execution error", "data": result}
-                        }
-                    else:
-                        response = {
-                            "jsonrpc": "2.0", "id": request_id,
-                            "result": {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
-                        }
-                elif method == 'notifications/initialized':
-                    # This is a notification, no response needed.
-                    pass
-                else:
-                    # Handle unknown methods.
-                    if request_id is not None:
-                        response = {
-                            "jsonrpc": "2.0", "id": request_id,
-                            "error": {"code": -32601, "message": f"Method not found: {method}"}
-                        }
-                
+                response, _ = await self._handle_jsonrpc_request(request)
+
                 # Send the response to standard output if it's not a notification.
-                if request_id is not None and response:
+                if response is not None:
                     print(json.dumps(response), flush=True)
 
             except Exception as e:
@@ -291,6 +299,60 @@ class MCPServer:
                     "error": {"code": -32603, "message": f"Internal error: {str(e)}", "data": traceback.format_exc()}
                 }
                 print(json.dumps(error_response), flush=True)
+
+    async def run_sse(self, host: str = "0.0.0.0", port: int = 8080):
+        """
+        Runs the MCP server over HTTP with SSE transport.
+
+        Exposes two endpoints:
+          POST /message  — receive a JSON-RPC request, return a JSON-RPC response
+          GET  /sse      — SSE stream for server-initiated events (keepalive)
+          GET  /health   — health check
+        """
+        from fastapi import FastAPI, Request
+        from fastapi.responses import JSONResponse, StreamingResponse
+        from starlette.responses import Response
+        import uvicorn
+
+        app = FastAPI(title="CodeGraphContext MCP Server")
+        self.code_watcher.start()
+
+        @app.get("/health")
+        async def health():
+            return {"status": "ok"}
+
+        @app.post("/message")
+        async def message(request: Request):
+            try:
+                body = await request.json()
+            except (json.JSONDecodeError, ValueError):
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "jsonrpc": "2.0", "id": None,
+                        "error": {"code": -32700, "message": "Parse error"}
+                    },
+                )
+
+            response, status_code = await self._handle_jsonrpc_request(body)
+            if response is None:
+                return Response(status_code=204)
+            return JSONResponse(content=response, status_code=status_code)
+
+        @app.get("/sse")
+        async def sse():
+            async def event_stream():
+                while True:
+                    yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
+                    await asyncio.sleep(30)
+            return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+        info_logger(f"Starting SSE transport on {host}:{port}")
+        info_logger(f"Database connected: {self.db_manager.is_connected()}")
+        info_logger(f"Tools registered: {len(self.tools)}")
+        config = uvicorn.Config(app, host=host, port=port, log_level="info")
+        server = uvicorn.Server(config)
+        await server.serve()
 
     def shutdown(self):
         """Gracefully shuts down the server and its components."""

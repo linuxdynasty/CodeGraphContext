@@ -119,14 +119,21 @@ def mcp_setup():
     configure_mcp_client()
 
 @mcp_app.command("start")
-def mcp_start():
+def mcp_start(
+    transport: str = typer.Option("stdio", "--transport", "-t", help="Transport mode: stdio or sse", case_sensitive=False),
+    host: str = typer.Option("0.0.0.0", "--host", help="Host to bind SSE server (only used with --transport sse)"),
+    port: int = typer.Option(8080, "--port", "-p", help="Port for SSE server (only used with --transport sse)"),
+):
     """
     Start the CodeGraphContext MCP server.
-    
-    Starts the server which listens for JSON-RPC requests from stdin.
-    This is used by IDE integrations (VS Code, Cursor, etc.).
+
+    With --transport stdio (default): listens for JSON-RPC on stdin (IDE integrations).
+    With --transport sse: runs an HTTP server with SSE transport on the specified host/port.
     """
-    console.print("[bold green]Starting CodeGraphContext Server...[/bold green]")
+    transport = transport.lower()
+    if transport not in ("stdio", "sse"):
+        raise typer.BadParameter(f"Unknown transport '{transport}'. Must be 'stdio' or 'sse'.")
+    console.print(f"[bold green]Starting CodeGraphContext Server ({transport} transport)...[/bold green]")
     _load_credentials()
 
     server = None
@@ -135,7 +142,10 @@ def mcp_start():
     try:
         # Initialize and run the main server.
         server = MCPServer(loop=loop)
-        loop.run_until_complete(server.run())
+        if transport == "sse":
+            loop.run_until_complete(server.run_sse(host=host, port=port))
+        else:
+            loop.run_until_complete(server.run())
     except ValueError as e:
         # This typically happens if credentials are still not found after all checks.
         console.print(f"[bold red]Configuration Error:[/bold red] {e}")
