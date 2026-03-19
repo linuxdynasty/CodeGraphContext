@@ -1206,9 +1206,6 @@ class GraphBuilder:
             # ------------------------------------------------------------------
             if job_id:
                 self.job_manager.update_job(job_id, status=JobStatus.RUNNING)
-            
-            self.add_repository_to_graph(path, is_dependency)
-            repo_name = path.name
 
             # Search for .cgcignore upwards
             cgcignore_path = None
@@ -1275,9 +1272,44 @@ class GraphBuilder:
                         # Should not happen if ignore_root is a parent, but safety fallback
                         filtered_files.append(f)
                 files = filtered_files
+
+            # ------------------------------------------------------------------
+            # Git-boundary detection: when indexing a parent directory containing
+            # multiple git repos, detect .git/ boundaries so each sub-repo gets
+            # its own Repository node while still sharing a unified imports_map
+            # for cross-repo call resolution.
+            # ------------------------------------------------------------------
+            git_repos = {}  # {repo_root_path: [files_in_repo]}
+            file_to_repo = {}  # {file_path: repo_root_path} — O(1) lookup
+            if path.is_dir():
+                for file in files:
+                    candidate = file.parent
+                    found = False
+                    while candidate != path.parent:
+                        if (candidate / ".git").is_dir():
+                            git_repos.setdefault(candidate, []).append(file)
+                            file_to_repo[file] = candidate
+                            found = True
+                            break
+                        candidate = candidate.parent
+                    if not found:
+                        # File not inside any git repo — assign to parent path
+                        git_repos.setdefault(path, []).append(file)
+                        file_to_repo[file] = path
+
+            # Create a Repository node for each detected git repo (or one for the path)
+            if git_repos:
+                for repo_root in git_repos:
+                    self.add_repository_to_graph(repo_root, is_dependency)
+                info_logger(f"Detected {len(git_repos)} git repositories under {path}")
+            else:
+                self.add_repository_to_graph(path, is_dependency)
+
             if job_id:
                 self.job_manager.update_job(job_id, total_files=len(files))
-            
+
+            # imports_map covers ALL files across ALL repos — this is the key
+            # benefit of parent-directory indexing for cross-repo resolution
             debug_log("Starting pre-scan to build imports map...")
             imports_map = self._pre_scan_for_imports(files)
             debug_log(f"Pre-scan complete. Found {len(imports_map)} definitions.")
@@ -1289,7 +1321,13 @@ class GraphBuilder:
                 if file.is_file():
                     if job_id:
                         self.job_manager.update_job(job_id, current_file=str(file))
-                    repo_path = path.resolve() if path.is_dir() else file.parent.resolve()
+                    # Use the git repo root (not parent dir) as repo_path so files
+                    # are linked to the correct Repository node
+                    file_git_repo = file_to_repo.get(file)
+                    repo_path = file_git_repo.resolve() if file_git_repo else (
+                        path.resolve() if path.is_dir() else file.parent.resolve()
+                    )
+                    repo_name = repo_path.name
                     file_data = self.parse_file(repo_path, file, is_dependency)
                     if "error" not in file_data:
                         self.add_file_to_graph(file_data, repo_name, imports_map)
