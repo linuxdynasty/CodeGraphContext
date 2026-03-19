@@ -1,0 +1,23 @@
+src/codegraphcontext/tools/graph_builder.py
+  ccac0c5d580074a6 1281-1283,1287,1290-1305,1308-1324,1332-1333,1343-1345,1367
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "d8d6ab7d2214160534381dbc6bdc490a76f077ca",
+  "prompts": {
+    "ccac0c5d580074a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aaa4ada9-19a8-4a6c-96b7-d8ab76ef5203",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Allen Sanabria <asanabria6910@gmail.com>",
+      "messages": [],
+      "total_additions": 43,
+      "total_deletions": 4,
+      "accepted_lines": 43,
+      "overriden_lines": 0
+    }
+  }
+}
