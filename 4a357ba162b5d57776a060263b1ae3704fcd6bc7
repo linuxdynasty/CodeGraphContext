@@ -1,0 +1,29 @@
+tests/integration/mcp/test_mcp_server.py
+  f34650fc58891207 6,71,74-167
+src/codegraphcontext/server.py
+  f34650fc58891207 210-226,236-268,275,283,285-286,288,314,326,328-333,336-340,351-352
+src/codegraphcontext/tools/graph_builder.py
+  f34650fc58891207 1341-1350,1355,1362-1364,1366-1367,1370-1379,1393-1405,1411,1414-1422,1425-1431,1433-1440,1443-1444
+src/codegraphcontext/cli/main.py
+  f34650fc58891207 123,133-135
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "4a357ba162b5d57776a060263b1ae3704fcd6bc7",
+  "prompts": {
+    "f34650fc58891207": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8f780591-3961-4ad3-94e8-53dcb0ce5aa2",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Allen Sanabria <asanabria6910@gmail.com>",
+      "messages": [],
+      "total_additions": 262,
+      "total_deletions": 120,
+      "accepted_lines": 238,
+      "overriden_lines": 0
+    }
+  }
+}
