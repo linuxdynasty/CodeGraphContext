@@ -1278,15 +1278,50 @@ class GraphBuilder:
             # multiple git repos, detect .git/ boundaries so each sub-repo gets
             # its own Repository node while still sharing a unified imports_map
             # for cross-repo call resolution.
+            # NOTE: This applies to the Tree-sitter pipeline only. The SCIP
+            # pipeline (SCIP_INDEXER=true) returns early above and does not
+            # benefit from this detection.
             # ------------------------------------------------------------------
             git_repos = {}  # {repo_root_path: [files_in_repo]}
             file_to_repo = {}  # {file_path: repo_root_path} — O(1) lookup
+            dir_to_repo_cache = {}  # {dir_path: repo_root_path|None} — memoize walks
             if path.is_dir():
                 for file in files:
-                    candidate = file.parent
+                    start_dir = file.parent
+                    # Check memoized cache first
+                    if start_dir in dir_to_repo_cache:
+                        repo_root = dir_to_repo_cache[start_dir]
+                        if repo_root is not None:
+                            git_repos.setdefault(repo_root, []).append(file)
+                            file_to_repo[file] = repo_root
+                        else:
+                            git_repos.setdefault(path, []).append(file)
+                            file_to_repo[file] = path
+                        continue
+
+                    # Walk up to find nearest .git (dir or file — supports
+                    # worktrees and submodules which use a .git file)
+                    candidate = start_dir
+                    walked = []
                     found = False
                     while candidate != path.parent:
-                        if (candidate / ".git").is_dir():
+                        if candidate in dir_to_repo_cache:
+                            # Hit a previously cached directory
+                            cached = dir_to_repo_cache[candidate]
+                            for d in walked:
+                                dir_to_repo_cache[d] = cached
+                            if cached is not None:
+                                git_repos.setdefault(cached, []).append(file)
+                                file_to_repo[file] = cached
+                            else:
+                                git_repos.setdefault(path, []).append(file)
+                                file_to_repo[file] = path
+                            found = True
+                            break
+                        walked.append(candidate)
+                        if (candidate / ".git").exists():
+                            for d in walked:
+                                dir_to_repo_cache[d] = candidate
                             git_repos.setdefault(candidate, []).append(file)
                             file_to_repo[file] = candidate
                             found = True
@@ -1294,6 +1329,8 @@ class GraphBuilder:
                         candidate = candidate.parent
                     if not found:
                         # File not inside any git repo — assign to parent path
+                        for d in walked:
+                            dir_to_repo_cache[d] = None
                         git_repos.setdefault(path, []).append(file)
                         file_to_repo[file] = path
 
@@ -1303,7 +1340,9 @@ class GraphBuilder:
                     self.add_repository_to_graph(repo_root, is_dependency)
                 info_logger(f"Detected {len(git_repos)} git repositories under {path}")
             else:
-                self.add_repository_to_graph(path, is_dependency)
+                # Single file or no git repos found — use parent for files
+                repo_root = path if path.is_dir() else path.parent
+                self.add_repository_to_graph(repo_root, is_dependency)
 
             if job_id:
                 self.job_manager.update_job(job_id, total_files=len(files))
@@ -1325,7 +1364,7 @@ class GraphBuilder:
                     # are linked to the correct Repository node
                     file_git_repo = file_to_repo.get(file)
                     repo_path = file_git_repo.resolve() if file_git_repo else (
-                        path.resolve() if path.is_dir() else file.parent.resolve()
+                        file.parent.resolve() if not path.is_dir() else path.resolve()
                     )
                     repo_name = repo_path.name
                     file_data = self.parse_file(repo_path, file, is_dependency)
