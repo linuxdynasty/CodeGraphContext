@@ -292,6 +292,89 @@ class MCPServer:
                 }
                 print(json.dumps(error_response), flush=True)
 
+    async def run_sse(self, host: str = "0.0.0.0", port: int = 8080):
+        """
+        Runs the MCP server over HTTP with SSE transport.
+
+        Exposes two endpoints:
+          POST /message  — receive a JSON-RPC request, return a JSON-RPC response
+          GET  /sse      — SSE stream for server-initiated events (keepalive)
+          GET  /health   — health check
+        """
+        from fastapi import FastAPI, Request
+        from fastapi.responses import JSONResponse, StreamingResponse
+        import uvicorn
+
+        app = FastAPI(title="CodeGraphContext MCP Server")
+        self.code_watcher.start()
+
+        @app.get("/health")
+        async def health():
+            return {"status": "ok"}
+
+        @app.post("/message")
+        async def message(request: Request):
+            body = await request.json()
+            method = body.get("method")
+            params = body.get("params", {})
+            request_id = body.get("id")
+
+            response = {}
+            if method == "initialize":
+                response = {
+                    "jsonrpc": "2.0", "id": request_id,
+                    "result": {
+                        "protocolVersion": "2025-03-26",
+                        "serverInfo": {
+                            "name": "CodeGraphContext", "version": "0.1.0",
+                            "systemPrompt": LLM_SYSTEM_PROMPT
+                        },
+                        "capabilities": {"tools": {"listTools": True}},
+                    }
+                }
+            elif method == "tools/list":
+                response = {
+                    "jsonrpc": "2.0", "id": request_id,
+                    "result": {"tools": list(self.tools.values())}
+                }
+            elif method == "tools/call":
+                tool_name = params.get("name")
+                args = params.get("arguments", {})
+                result = await self.handle_tool_call(tool_name, args)
+                if "error" in result:
+                    response = {
+                        "jsonrpc": "2.0", "id": request_id,
+                        "error": {"code": -32000, "message": "Tool execution error", "data": result}
+                    }
+                else:
+                    response = {
+                        "jsonrpc": "2.0", "id": request_id,
+                        "result": {"content": [{"type": "text", "text": json.dumps(result, indent=2)}]}
+                    }
+            elif method == "notifications/initialized":
+                return JSONResponse(content={})
+            else:
+                if request_id is not None:
+                    response = {
+                        "jsonrpc": "2.0", "id": request_id,
+                        "error": {"code": -32601, "message": f"Method not found: {method}"}
+                    }
+
+            return JSONResponse(content=response)
+
+        @app.get("/sse")
+        async def sse():
+            async def event_stream():
+                while True:
+                    yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
+                    await asyncio.sleep(30)
+            return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+        info_logger(f"Starting SSE transport on {host}:{port}")
+        config = uvicorn.Config(app, host=host, port=port, log_level="info")
+        server = uvicorn.Server(config)
+        await server.serve()
+
     def shutdown(self):
         """Gracefully shuts down the server and its components."""
         debug_logger("Shutting down server...")
