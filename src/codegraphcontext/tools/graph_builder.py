@@ -1338,22 +1338,45 @@ class GraphBuilder:
             if git_repos:
                 for repo_root in git_repos:
                     self.add_repository_to_graph(repo_root, is_dependency)
-                info_logger(f"Detected {len(git_repos)} git repositories under {path}")
+                # Log per-repo file counts so operators can see what's about to be indexed
+                repo_summary = sorted(
+                    ((r.name, len(flist)) for r, flist in git_repos.items()),
+                    key=lambda x: -x[1],
+                )
+                info_logger(
+                    f"Detected {len(git_repos)} repos under {path} "
+                    f"({len(files)} total files). "
+                    f"Largest: {', '.join(f'{n}({c})' for n, c in repo_summary[:5])}"
+                )
             else:
                 # Single file or no git repos found — use parent for files
                 repo_root = path if path.is_dir() else path.parent
                 self.add_repository_to_graph(repo_root, is_dependency)
+                info_logger(f"Indexing single path {path} ({len(files)} files)")
 
             if job_id:
                 self.job_manager.update_job(job_id, total_files=len(files))
 
             # imports_map covers ALL files across ALL repos — this is the key
             # benefit of parent-directory indexing for cross-repo resolution
-            debug_log("Starting pre-scan to build imports map...")
+            import time as _time
+            prescan_start = _time.monotonic()
+            info_logger(f"Pre-scanning {len(files)} files for imports map...")
             imports_map = self._pre_scan_for_imports(files)
-            debug_log(f"Pre-scan complete. Found {len(imports_map)} definitions.")
+            prescan_elapsed = _time.monotonic() - prescan_start
+            info_logger(f"Pre-scan done in {prescan_elapsed:.1f}s — {len(imports_map)} definitions found")
 
             all_file_data = []
+            total_files = len(files)
+            # Log progress every 10% (min every 100 files)
+            log_interval = max(100, total_files // 10) if total_files > 0 else 1
+            index_start = _time.monotonic()
+
+            # Track per-repo progress for multi-repo indexing
+            current_repo_name = None
+            repo_file_count = 0
+            repos_completed = 0
+            total_repos = len(git_repos) if git_repos else 1
 
             processed_count = 0
             for file in files:
@@ -1367,17 +1390,58 @@ class GraphBuilder:
                         file.parent.resolve() if not path.is_dir() else path.resolve()
                     )
                     repo_name = repo_path.name
+
+                    # Log repo transitions so operators see which repo is being indexed
+                    if repo_name != current_repo_name:
+                        if current_repo_name is not None:
+                            repos_completed += 1
+                            info_logger(
+                                f"Finished repo {current_repo_name} ({repo_file_count} files) "
+                                f"[{repos_completed}/{total_repos} repos done]"
+                            )
+                        current_repo_name = repo_name
+                        repo_file_count = 0
+                        info_logger(f"Starting repo {repo_name} [{repos_completed + 1}/{total_repos}]")
+
                     file_data = self.parse_file(repo_path, file, is_dependency)
                     if "error" not in file_data:
                         self.add_file_to_graph(file_data, repo_name, imports_map)
                         all_file_data.append(file_data)
                     processed_count += 1
+                    repo_file_count += 1
                     if job_id:
                         self.job_manager.update_job(job_id, processed_files=processed_count)
+                    if processed_count % log_interval == 0:
+                        elapsed = _time.monotonic() - index_start
+                        rate = processed_count / elapsed if elapsed > 0 else 0
+                        remaining = (total_files - processed_count) / rate if rate > 0 else 0
+                        info_logger(
+                            f"Progress: {processed_count}/{total_files} files "
+                            f"({processed_count * 100 // total_files}%) "
+                            f"| {rate:.0f} files/s | ~{remaining:.0f}s remaining"
+                        )
                     await asyncio.sleep(0.01)
 
+            # Log final repo
+            if current_repo_name is not None:
+                repos_completed += 1
+                info_logger(
+                    f"Finished repo {current_repo_name} ({repo_file_count} files) "
+                    f"[{repos_completed}/{total_repos} repos done]"
+                )
+
+            total_elapsed = _time.monotonic() - index_start
+            info_logger(
+                f"File indexing complete: {processed_count}/{total_files} files "
+                f"across {repos_completed} repos in {total_elapsed:.1f}s "
+                f"({processed_count / total_elapsed:.0f} files/s)"
+            )
+            info_logger("Creating inheritance links and function calls...")
+            link_start = _time.monotonic()
             self._create_all_inheritance_links(all_file_data, imports_map)
             self._create_all_function_calls(all_file_data, imports_map)
+            link_elapsed = _time.monotonic() - link_start
+            info_logger(f"Link creation done in {link_elapsed:.1f}s")
             
             if job_id:
                 self.job_manager.update_job(job_id, status=JobStatus.COMPLETED, end_time=datetime.now())

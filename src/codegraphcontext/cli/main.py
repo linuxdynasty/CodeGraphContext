@@ -120,7 +120,7 @@ def mcp_setup():
 
 @mcp_app.command("start")
 def mcp_start(
-    transport: str = typer.Option("stdio", "--transport", "-t", help="Transport mode: stdio or sse"),
+    transport: str = typer.Option("stdio", "--transport", "-t", help="Transport mode: stdio or sse", case_sensitive=False),
     host: str = typer.Option("0.0.0.0", "--host", help="Host to bind SSE server (only used with --transport sse)"),
     port: int = typer.Option(8080, "--port", "-p", help="Port for SSE server (only used with --transport sse)"),
 ):
@@ -130,6 +130,9 @@ def mcp_start(
     With --transport stdio (default): listens for JSON-RPC on stdin (IDE integrations).
     With --transport sse: runs an HTTP server with SSE transport on the specified host/port.
     """
+    transport = transport.lower()
+    if transport not in ("stdio", "sse"):
+        raise typer.BadParameter(f"Unknown transport '{transport}'. Must be 'stdio' or 'sse'.")
     console.print(f"[bold green]Starting CodeGraphContext Server ({transport} transport)...[/bold green]")
     _load_credentials()
 
