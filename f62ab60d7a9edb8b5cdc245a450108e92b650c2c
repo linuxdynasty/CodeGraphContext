@@ -1,0 +1,27 @@
+Dockerfile
+  ccac0c5d580074a6 29,33-37
+docs/PATCH-NOTES.md
+  ccac0c5d580074a6 1-87
+src/codegraphcontext/tools/graph_builder.py
+  ccac0c5d580074a6 1275-1307,1310-1312,1324-1328,1330
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "f62ab60d7a9edb8b5cdc245a450108e92b650c2c",
+  "prompts": {
+    "ccac0c5d580074a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "aaa4ada9-19a8-4a6c-96b7-d8ab76ef5203",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Allen Sanabria <asanabria6910@gmail.com>",
+      "messages": [],
+      "total_additions": 136,
+      "total_deletions": 6,
+      "accepted_lines": 135,
+      "overriden_lines": 0
+    }
+  }
+}
