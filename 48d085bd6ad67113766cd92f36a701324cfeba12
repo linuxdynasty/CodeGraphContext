@@ -1,0 +1,115 @@
+src/codegraphcontext/tools/cross_repo_linker.py
+  7477afe849163958 52,253-272
+  88cd926f62b211b6 1-51,53-59,61,63-252
+tests/fixtures/sample_projects/sample_project_yaml_infra/crossplane/composition.yaml
+  88cd926f62b211b6 1-23
+tests/fixtures/sample_projects/sample_project_yaml_infra/k8s/deployment.yaml
+  88cd926f62b211b6 1-43
+tests/fixtures/sample_projects/sample_project_yaml_infra/crossplane/xrd.yaml
+  88cd926f62b211b6 1-27
+src/codegraphcontext/tools/languages/yaml_infra.py
+  7477afe849163958 398-403,405-435
+  88cd926f62b211b6 1-397,404,436-514
+docs/cilium-infrastructure.md
+  7477afe849163958 1-167
+tests/fixtures/sample_projects/sample_project_yaml_infra/k8s/httproute.yaml
+  88cd926f62b211b6 1-17
+src/codegraphcontext/tool_definitions.py
+  88cd926f62b211b6 196-279
+  7477afe849163958 280-291
+src/codegraphcontext/cli/config_manager.py
+  88cd926f62b211b6 41,47-53,81-85,103-104
+tests/fixtures/sample_projects/sample_project_yaml_infra/helm/values.yaml
+  88cd926f62b211b6 1-15
+tests/fixtures/sample_ecosystem/dependency-graph.yaml
+  88cd926f62b211b6 1-76
+tests/fixtures/sample_projects/sample_project_yaml_infra/kustomize/kustomization.yaml
+  88cd926f62b211b6 1-16
+tests/fixtures/sample_projects/sample_project_yaml_infra/argocd/applicationset.yaml
+  88cd926f62b211b6 1-23
+tests/unit/core/test_ecosystem.py
+  88cd926f62b211b6 1-61,63-205
+src/codegraphcontext/core/ecosystem.py
+  88cd926f62b211b6 1-297,299-365
+tests/integration/test_full_flow.py
+  7477afe849163958 1-286
+src/codegraphcontext/server.py
+  7477afe849163958 207-209,245
+  88cd926f62b211b6 30,34,36-37,86-88,181-206,210-211,236-244,246,248-256
+src/codegraphcontext/tools/graph_builder.py
+  7477afe849163958 337,340,363,365,396,398,440-448,450-452,456-461,465-466,468,482-483,485,496-500,502,504-505,507-509,511-513,515-516,535-542,544-548,551,555,563-564,566,568,575,580,837-883,939,944,994,1000,1005,1012,1030,1032,1037,1041,1045,1047,1050,1057,1062,1064,1583
+  88cd926f62b211b6 104-107,140-150,175-196,201-206,221-225,417-432
+src/codegraphcontext/core/database_kuzu.py
+  88cd926f62b211b6 109-128,130,132,138-150
+src/codegraphcontext/core/database_falkordb.py
+  7477afe849163958 355,358-359,361,363-364,380,383,385-395
+src/codegraphcontext/core/ecosystem_indexer.py
+  88cd926f62b211b6 1-23,25-160,162-451
+tests/unit/parsers/test_yaml_infra_parser.py
+  88cd926f62b211b6 1-36,39-81,83-262
+tests/unit/handlers/test_repo_context.py
+  7477afe849163958 1-248
+tests/fixtures/sample_projects/sample_project_terraform/variables.tf
+  88cd926f62b211b6 1-47
+src/codegraphcontext/tools/languages/hcl_terraform.py
+  88cd926f62b211b6 1-96,98-358
+docker-compose.yaml
+  7477afe849163958 1-19
+tests/fixtures/sample_projects/sample_project_yaml_infra/helm/Chart.yaml
+  88cd926f62b211b6 1-10
+tests/fixtures/sample_projects/sample_project_yaml_infra/argocd/application.yaml
+  88cd926f62b211b6 1-18
+tests/fixtures/sample_projects/sample_project_yaml_infra/crossplane/claim.yaml
+  88cd926f62b211b6 1-18
+tests/fixtures/sample_projects/sample_project_terraform/main.tf
+  88cd926f62b211b6 1-59
+tests/fixtures/sample_projects/sample_project_terraform/outputs.tf
+  88cd926f62b211b6 1-9
+tests/unit/parsers/test_hcl_terraform_parser.py
+  88cd926f62b211b6 1-61,63-78,81-93,95-135,137-144,146-148,150-199
+src/codegraphcontext/tools/handlers/ecosystem_handlers.py
+  7477afe849163958 71-74,80-89,224,234,241-242,252,259-260,270,275,281-290,317-318,325,332-333,340,347,354,361-362,368,374-375,380,390,396,428-429,435,442,448,455-456,465,472-473,482,599,609-999
+  88cd926f62b211b6 1-70,75-79,90-132,136-144,148-160,164-172,176-184,188-223,225-232,236-240,243-250,254-258,261-268,272-274,276-280,291-316,319-323,327-331,334-338,342-346,348-352,356-360,363-366,373,376-378,382-389,391-394,398-427,430-433,437-441,443-446,450-454,457-463,467-471,474-480,484-531,535-549,553-563,567-573,577-583,587-594,598,600-608
+src/codegraphcontext/cli/main.py
+  88cd926f62b211b6 2176-2371
+src/codegraphcontext/prompts.py
+  7477afe849163958 49,137,165-169
+  88cd926f62b211b6 93-113,119-120,125-136,158-164,170
+tests/unit/core/test_infra_linking.py
+  7477afe849163958 1-245
+scripts/test-neo4j.sh
+  7477afe849163958 1-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "48d085bd6ad67113766cd92f36a701324cfeba12",
+  "prompts": {
+    "7477afe849163958": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c4f87fc6-872a-4d46-b906-f577999ca7f6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Allen Sanabria <asanabria6910@gmail.com>",
+      "messages": [],
+      "total_additions": 1733,
+      "total_deletions": 138,
+      "accepted_lines": 1703,
+      "overriden_lines": 0
+    },
+    "88cd926f62b211b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc983f30-1152-4954-be1d-34a8d570cf52",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Allen Sanabria <asanabria6910@gmail.com>",
+      "messages": [],
+      "total_additions": 4287,
+      "total_deletions": 22,
+      "accepted_lines": 3929,
+      "overriden_lines": 42
+    }
+  }
+}
